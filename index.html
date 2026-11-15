@@ -65,7 +65,7 @@
   </div>
 
   <div id="recvListen" class="hide">
-    <div class="live" style="background:#14222a;border-color:#23455a;color:#5bc0ff"><span class="dot" style="background:#3b9bff"></span> Sun rahe hain…</div>
+    <div class="live" style="background:#14222a;border-color:#23455a;color:#5bc0ff"><span class="dot" style="background:#3b9bff"></span> Sun rahe hain… (background mein bhi chalega)</div>
     <button class="back" onclick="location.reload()">⟵ Band karein</button>
   </div>
 
@@ -101,15 +101,51 @@ function code(){ return Math.random().toString(36).slice(2,8); }
 function linkFor(id,mode){ return location.origin+location.pathname+'?room='+id+'&mode='+mode; }
 function newPC(){ return new RTCPeerConnection(ICE); }
 function getMic(){ return navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
-function playRemote(st){ const a=$('remoteAudio'); a.srcObject=st; a.play().catch(()=>{}); }
-let localStream;
+let localStream, audioCtx, remoteStream, wakeLock;
+
+function keepAliveAudio(st){
+  remoteStream = st;
+  const a = $('remoteAudio');
+  a.srcObject = st; a.muted = true; a.play().catch(()=>{});
+  try {
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(st);
+    src.connect(audioCtx.destination);
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+  } catch(e){ a.muted = false; }
+  setupMediaSession();
+  requestWakeLock();
+}
+function setupMediaSession(){
+  if('mediaSession' in navigator){
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title:'Live Voice', artist:'Voice Link', album:'Live' });
+      navigator.mediaSession.playbackState = 'playing';
+      navigator.mediaSession.setActionHandler('play', ()=>{ resumeAudio(); });
+      navigator.mediaSession.setActionHandler('pause', ()=>{});
+      navigator.mediaSession.setActionHandler('stop', ()=>{ location.reload(); });
+    } catch(e){}
+  }
+}
+async function requestWakeLock(){
+  try { if('wakeLock' in navigator){ wakeLock = await navigator.wakeLock.request('screen'); } } catch(e){}
+}
+function resumeAudio(){
+  const a = $('remoteAudio'); if(a && a.srcObject){ a.play().catch(()=>{}); }
+  if(audioCtx && audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
+}
+document.addEventListener('visibilitychange', ()=>{ resumeAudio(); if(document.visibilityState==='visible'){ requestWakeLock(); } });
+window.addEventListener('focus', resumeAudio);
+window.addEventListener('pageshow', resumeAudio);
+
+function playRemote(st){ keepAliveAudio(st); }
 
 async function startHost(mode){
   try {
     const id = code(); const ref = db.ref('rooms/'+id); const pc = newPC();
     if(mode==='speak'){ localStream = await getMic(); localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); }
     else { pc.addTransceiver('audio', { direction:'recvonly' }); }
-    pc.ontrack = e => { if(mode==='listen'){ playRemote(e.streams[0]); $('hostLiveTxt').textContent='Connected — sun rahe hain'; $('hostLive').classList.remove('hide'); $('hostState').textContent=''; setStatus('Connected ✓','ok'); } };
+    pc.ontrack = e => { if(mode==='listen'){ playRemote(e.streams[0]); $('hostLiveTxt').textContent='Connected — sun rahe hain'; $('hostLive').classList.remove('hide'); $('hostState').textContent=''; setStatus('Connected ✓ (background mein bhi chalega)','ok'); } };
     pc.onicecandidate = e => { if(e.candidate) ref.child('callerCandidates').push(e.candidate.toJSON()); };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
