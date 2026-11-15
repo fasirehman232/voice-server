@@ -64,7 +64,7 @@
 
   <div id="recvLive" class="hide">
     <div class="live"><span class="dot"></span> 🔴 AAP LIVE HAIN — aap ki awaz ja rahi hai</div>
-    <div class="big-ok">Mic ON hai</div>
+    <div class="big-ok">Mic ON · background mein bhi</div>
     <button class="back" onclick="location.reload()">⟵ Disconnect karein</button>
   </div>
 
@@ -74,6 +74,7 @@
   </div>
 
   <audio id="remoteAudio" autoplay playsinline></audio>
+  <audio id="silentAudio" loop playsinline></audio>
   <div class="status" id="status"></div>
 </div>
 
@@ -105,43 +106,49 @@ function code(){ return Math.random().toString(36).slice(2,8); }
 function linkFor(id,mode){ return location.origin+location.pathname+'?room='+id+'&mode='+mode; }
 function newPC(){ return new RTCPeerConnection(ICE); }
 function getMic(){ return navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
-let localStream, wakeLock;
+let localStream, wakeLock, micCtx;
 
-function keepAliveAudio(st){
-  const a = $('remoteAudio');
-  a.srcObject = st; a.muted = false; a.volume = 1.0;
-  a.play().catch(()=>{});
-  setupMediaSession();
-  requestWakeLock();
+function makeSilentURL(){
+  const sr=8000, dur=0.4, n=sr*dur, buf=new ArrayBuffer(44+n), dv=new DataView(buf);
+  const ws=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  ws(0,'RIFF'); dv.setUint32(4,36+n,true); ws(8,'WAVE'); ws(12,'fmt ');
+  dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,sr,true); dv.setUint32(28,sr,true); dv.setUint16(32,1,true); dv.setUint16(34,8,true);
+  ws(36,'data'); dv.setUint32(40,n,true);
+  for(let i=0;i<n;i++) dv.setUint8(44+i,128);
+  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
 }
+function startSilentLoop(){ try{ const s=$('silentAudio'); if(!s.src) s.src=makeSilentURL(); s.loop=true; s.volume=1; s.play().catch(()=>{}); }catch(e){} }
+function keepMicAlive(stream){ try{ micCtx=micCtx||new (window.AudioContext||window.webkitAudioContext)(); const src=micCtx.createMediaStreamSource(stream); const g=micCtx.createGain(); g.gain.value=0; src.connect(g); g.connect(micCtx.destination); if(micCtx.state==='suspended') micCtx.resume(); }catch(e){} }
 function setupMediaSession(){
-  if('mediaSession' in navigator){
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({ title:'Live Voice', artist:'Voice Link', album:'Live' });
-      navigator.mediaSession.playbackState = 'playing';
-      navigator.mediaSession.setActionHandler('play', ()=>{ resumeAudio(); });
-      navigator.mediaSession.setActionHandler('pause', ()=>{ resumeAudio(); });
-      navigator.mediaSession.setActionHandler('stop', ()=>{ location.reload(); });
-    } catch(e){}
-  }
+  if('mediaSession' in navigator){ try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title:'Live Voice', artist:'Voice Link', album:'Live' });
+    navigator.mediaSession.playbackState = 'playing';
+    navigator.mediaSession.setActionHandler('play', ()=>resumeAll());
+    navigator.mediaSession.setActionHandler('pause', ()=>resumeAll());
+    navigator.mediaSession.setActionHandler('stop', ()=>location.reload());
+  } catch(e){} }
 }
-async function requestWakeLock(){
-  try { if('wakeLock' in navigator){ wakeLock = await navigator.wakeLock.request('screen'); } } catch(e){}
+async function requestWakeLock(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
+function enableBackground(micStream){ startSilentLoop(); if(micStream) keepMicAlive(micStream); setupMediaSession(); requestWakeLock(); }
+function resumeAll(){
+  const a=$('remoteAudio'); if(a && a.srcObject){ a.muted=false; a.play().catch(()=>{}); }
+  const s=$('silentAudio'); if(s && s.src){ s.play().catch(()=>{}); }
+  if(micCtx && micCtx.state==='suspended'){ micCtx.resume().catch(()=>{}); }
 }
-function resumeAudio(){ const a=$('remoteAudio'); if(a && a.srcObject){ a.muted=false; a.play().catch(()=>{}); } }
-document.addEventListener('visibilitychange', ()=>{ resumeAudio(); if(document.visibilityState==='visible'){ requestWakeLock(); } });
-window.addEventListener('focus', resumeAudio);
-window.addEventListener('pageshow', resumeAudio);
-setInterval(resumeAudio, 2000);
+document.addEventListener('visibilitychange', ()=>{ resumeAll(); if(document.visibilityState==='visible'){ requestWakeLock(); } });
+window.addEventListener('focus', resumeAll);
+window.addEventListener('pageshow', resumeAll);
+setInterval(resumeAll, 2000);
 
-function playRemote(st){ keepAliveAudio(st); }
+function playRemote(st){ const a=$('remoteAudio'); a.srcObject=st; a.muted=false; a.volume=1; a.play().catch(()=>{}); startSilentLoop(); setupMediaSession(); requestWakeLock(); }
 
 async function startHost(mode){
   try {
     const id = code(); const ref = db.ref('rooms/'+id); const pc = newPC();
-    if(mode==='speak'){ localStream = await getMic(); localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); }
+    if(mode==='speak'){ localStream = await getMic(); localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); enableBackground(localStream); }
     else { pc.addTransceiver('audio', { direction:'recvonly' }); }
-    pc.ontrack = e => { if(mode==='listen'){ playRemote(e.streams[0]); $('hostLiveTxt').textContent='Connected — sun rahe hain'; $('hostLive').classList.remove('hide'); $('hostState').textContent=''; setStatus('Connected ✓ (background mein bhi chalega)','ok'); } };
+    pc.ontrack = e => { if(mode==='listen'){ playRemote(e.streams[0]); $('hostLiveTxt').textContent='Connected — sun rahe hain'; $('hostLive').classList.remove('hide'); $('hostState').textContent=''; setStatus('Connected ✓ (background mein bhi)','ok'); } };
     pc.onicecandidate = e => { if(e.candidate) ref.child('callerCandidates').push(e.candidate.toJSON()); };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -149,7 +156,7 @@ async function startHost(mode){
     ref.child('answer').on('value', s => { const a=s.val(); if(a && !pc.currentRemoteDescription){ pc.setRemoteDescription(new RTCSessionDescription(a)); } });
     ref.child('calleeCandidates').on('child_added', s => { try{ pc.addIceCandidate(new RTCIceCandidate(s.val())); }catch(e){} });
     $('shareLink').textContent = linkFor(id, mode); show('host');
-    if(mode==='speak'){ $('hostLiveTxt').textContent='Aap ka mic ON hai'; $('hostLive').classList.remove('hide'); }
+    if(mode==='speak'){ $('hostLiveTxt').textContent='Aap ka mic ON hai (background mein bhi)'; $('hostLive').classList.remove('hide'); }
     setStatus('Link bhejein. Jab doosra accept kare, connect ho jayega.','ok');
   } catch(err){ setStatus('Mic/connection masla: '+(err&&err.name||err)+'. Browser tab mein kholें.','err'); }
 }
@@ -160,7 +167,7 @@ let inviteMode=null, inviteRoom=null;
 async function accept(){
   try {
     const ref = db.ref('rooms/'+inviteRoom); const pc = newPC();
-    if(inviteMode==='listen'){ localStream = await getMic(); localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); show('recvLive'); }
+    if(inviteMode==='listen'){ localStream = await getMic(); localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); enableBackground(localStream); show('recvLive'); }
     else { show('recvListen'); }
     pc.ontrack = e => { if(inviteMode==='speak'){ playRemote(e.streams[0]); } };
     pc.onicecandidate = e => { if(e.candidate) ref.child('calleeCandidates').push(e.candidate.toJSON()); };
