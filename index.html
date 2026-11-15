@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Live Voice Link</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e1116">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -65,7 +69,7 @@
   </div>
 
   <div id="recvListen" class="hide">
-    <div class="live" style="background:#14222a;border-color:#23455a;color:#5bc0ff"><span class="dot" style="background:#3b9bff"></span> Sun rahe hain… (background mein bhi chalega)</div>
+    <div class="live" style="background:#14222a;border-color:#23455a;color:#5bc0ff"><span class="dot" style="background:#3b9bff"></span> Sun rahe hain… (background mein bhi)</div>
     <button class="back" onclick="location.reload()">⟵ Band karein</button>
   </div>
 
@@ -101,18 +105,12 @@ function code(){ return Math.random().toString(36).slice(2,8); }
 function linkFor(id,mode){ return location.origin+location.pathname+'?room='+id+'&mode='+mode; }
 function newPC(){ return new RTCPeerConnection(ICE); }
 function getMic(){ return navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
-let localStream, audioCtx, remoteStream, wakeLock;
+let localStream, wakeLock;
 
 function keepAliveAudio(st){
-  remoteStream = st;
   const a = $('remoteAudio');
-  a.srcObject = st; a.muted = true; a.play().catch(()=>{});
-  try {
-    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
-    const src = audioCtx.createMediaStreamSource(st);
-    src.connect(audioCtx.destination);
-    if(audioCtx.state === 'suspended') audioCtx.resume();
-  } catch(e){ a.muted = false; }
+  a.srcObject = st; a.muted = false; a.volume = 1.0;
+  a.play().catch(()=>{});
   setupMediaSession();
   requestWakeLock();
 }
@@ -122,7 +120,7 @@ function setupMediaSession(){
       navigator.mediaSession.metadata = new MediaMetadata({ title:'Live Voice', artist:'Voice Link', album:'Live' });
       navigator.mediaSession.playbackState = 'playing';
       navigator.mediaSession.setActionHandler('play', ()=>{ resumeAudio(); });
-      navigator.mediaSession.setActionHandler('pause', ()=>{});
+      navigator.mediaSession.setActionHandler('pause', ()=>{ resumeAudio(); });
       navigator.mediaSession.setActionHandler('stop', ()=>{ location.reload(); });
     } catch(e){}
   }
@@ -130,13 +128,11 @@ function setupMediaSession(){
 async function requestWakeLock(){
   try { if('wakeLock' in navigator){ wakeLock = await navigator.wakeLock.request('screen'); } } catch(e){}
 }
-function resumeAudio(){
-  const a = $('remoteAudio'); if(a && a.srcObject){ a.play().catch(()=>{}); }
-  if(audioCtx && audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
-}
+function resumeAudio(){ const a=$('remoteAudio'); if(a && a.srcObject){ a.muted=false; a.play().catch(()=>{}); } }
 document.addEventListener('visibilitychange', ()=>{ resumeAudio(); if(document.visibilityState==='visible'){ requestWakeLock(); } });
 window.addEventListener('focus', resumeAudio);
 window.addEventListener('pageshow', resumeAudio);
+setInterval(resumeAudio, 2000);
 
 function playRemote(st){ keepAliveAudio(st); }
 
